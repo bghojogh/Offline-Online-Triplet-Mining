@@ -6,13 +6,17 @@ import umap
 import matplotlib.pyplot as plt
 import dataset_characteristics
 import glob
-
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import confusion_matrix
 import pickle
 import itertools
 import dataset_characteristics
+from sklearn import preprocessing
+from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.model_selection import StratifiedKFold
+from sklearn.svm import LinearSVC
 
 
 class Evaluate_embedding_space():
@@ -61,29 +65,38 @@ class Evaluate_embedding_space():
             if not os.path.exists(path_save_embeddings_of_test_data+"plots\\"):
                 os.makedirs(path_save_embeddings_of_test_data+"plots\\")
             # plt.figure(200)
-            plt = self.Kather_get_color_and_shape_of_points(embedding=embedding, subtype_=subtypes)
+            plt = self.Kather_get_color_and_shape_of_points(embedding=embedding, subtype_=subtypes, n_samples_plot=2000)
             plt.savefig(path_save_embeddings_of_test_data+"plots\\" + 'embedding.png')
             plt.clf()
             plt.close()
         return embedding, subtypes
 
-    def Kather_get_color_and_shape_of_points(self, embedding, subtype_):
+    def Kather_get_color_and_shape_of_points(self, embedding, subtype_, n_samples_plot=None):
+        class_names = ["00_TUMOR", "01_STROMA", "02_MUCUS", "03_LYMPHO", "04_DEBRIS", "05_SMOOTH_MUSCLE", "06_ADIPOSE", "07_BACKGROUND", "08_NORMAL"]
+        n_samples = embedding.shape[0]
+        if n_samples_plot != None:
+            indices_to_plot = np.random.choice(range(n_samples), min(n_samples_plot, n_samples), replace=False)
+        else:
+            indices_to_plot = np.random.choice(range(n_samples), n_samples, replace=False)
+        embedding = embedding[indices_to_plot, :]
         if embedding.shape[1] == 2:
             embedding_ = embedding
         else:
             embedding_ = umap.UMAP(n_neighbors=500).fit_transform(embedding)
+        subtype_sampled = [subtype_[i] for i in indices_to_plot]
         n_points = embedding_.shape[0]
         labels = np.zeros((n_points,))
-        labels[np.asarray(subtype_)=="01_TUMOR"] = 0
-        labels[np.asarray(subtype_)=="02_STROMA"] = 1
-        labels[np.asarray(subtype_)=="03_COMPLEX"] = 2
-        labels[np.asarray(subtype_)=="04_LYMPHO"] = 3
-        labels[np.asarray(subtype_)=="05_DEBRIS"] = 4
-        labels[np.asarray(subtype_)=="06_MUCOSA"] = 5
-        labels[np.asarray(subtype_)=="07_ADIPOSE"] = 6
-        labels[np.asarray(subtype_)=="08_EMPTY"] = 7
+        labels[np.asarray(subtype_sampled)==class_names[0]] = 0
+        labels[np.asarray(subtype_sampled)==class_names[1]] = 1
+        labels[np.asarray(subtype_sampled)==class_names[2]] = 2
+        labels[np.asarray(subtype_sampled)==class_names[3]] = 3
+        labels[np.asarray(subtype_sampled)==class_names[4]] = 4
+        labels[np.asarray(subtype_sampled)==class_names[5]] = 5
+        labels[np.asarray(subtype_sampled)==class_names[6]] = 6
+        labels[np.asarray(subtype_sampled)==class_names[7]] = 7
+        labels[np.asarray(subtype_sampled)==class_names[8]] = 8
         _, ax = plt.subplots(1, figsize=(14, 10))
-        classes = ["TUMOR", "STROMA", "COMPLEX", "LYMPHO", "DEBRIS", "MUCOSA", "ADIPOSE", "EMPTY"]
+        classes = dataset_characteristics.get_class_names()
         n_classes = len(classes)
         plt.scatter(embedding_[:, 0], embedding_[:, 1], s=10, c=labels, cmap='Spectral', alpha=1.0)
         plt.setp(ax, xticks=[], yticks=[])
@@ -230,3 +243,63 @@ class Evaluate_embedding_space():
         np.set_printoptions(threshold=np.inf, linewidth=np.inf)  # turn off summarization, line-wrapping
         with open(file_address, 'w') as f:
             f.write(np.array2string(variable, separator=', '))
+
+    def classification_in_target_domain_different_data_portions(self, X, y, path_save_accuracy_of_test_data, proportions, cv=10):
+        le = preprocessing.LabelEncoder()
+        le.fit(np.unique(np.asarray(y)))
+        y = le.transform(y)
+        scores_array = np.zeros((len(proportions), cv))
+        for proportion_index, proportion in enumerate(proportions):
+            print("processing proportion: " + str(proportion) + "....")
+            if proportion == 1:
+                X_ = X
+                y_ = y
+            else:
+                sss = StratifiedShuffleSplit(n_splits=1, test_size=proportion, random_state=0)
+                for train_index, test_index in sss.split(X, y):
+                    X_ = X[test_index, :]
+                    y_ = y[test_index]
+            # scores = cross_val_score(clf, X_, y_, cv=cv)
+            skf = StratifiedKFold(n_splits=cv)
+            scores = []
+            clf = LinearSVC(random_state=0, tol=1e-4, max_iter=10000)
+            # clf = RandomForestClassifier(random_state=0)
+            for train_index, test_index in skf.split(X_, y_):
+                X_train, X_test = X_[train_index], X_[test_index]
+                y_train, y_test = y_[train_index], y_[test_index]
+                clf.fit(X=X_train, y=y_train)
+                scores.append(clf.score(X=X_test, y=y_test))
+            del clf
+            scores_array[proportion_index, :] = scores
+        if not os.path.exists(path_save_accuracy_of_test_data):
+            os.makedirs(path_save_accuracy_of_test_data)
+        np.save(path_save_accuracy_of_test_data+"scores_array.npy", scores_array)
+        np.savetxt(path_save_accuracy_of_test_data+"scores_array.txt", scores_array, delimiter=',')  
+        # plot:
+        scores_array = scores_array * 100
+        proportions = [proportion*100 for proportion in proportions]
+        mean_scores = scores_array.mean(axis=1)
+        min_scores = scores_array.min(axis=1)
+        max_scores = scores_array.max(axis=1)
+        std_scores = scores_array.std(axis=1)
+        plt.fill_between(proportions, min_scores, max_scores, color="r", alpha=0.4)
+        plt.plot(proportions, mean_scores, "*-", color="r")
+        plt.xlabel("proportion of data (%)")
+        plt.ylabel("accuracy (%)")
+        plt.ylim(40, 100)
+        plt.grid()
+        if not os.path.exists(path_save_accuracy_of_test_data):
+            os.makedirs(path_save_accuracy_of_test_data)
+        plt.savefig(path_save_accuracy_of_test_data + 'plot.png')
+        plt.clf()
+        plt.close()
+        # save results:
+        np.save(path_save_accuracy_of_test_data+"mean_scores.npy", mean_scores)
+        np.savetxt(path_save_accuracy_of_test_data+"mean_scores.txt", mean_scores, delimiter=',')  
+        np.save(path_save_accuracy_of_test_data+"min_scores.npy", min_scores)
+        np.savetxt(path_save_accuracy_of_test_data+"min_scores.txt", min_scores, delimiter=',')  
+        np.save(path_save_accuracy_of_test_data+"max_scores.npy", max_scores)
+        np.savetxt(path_save_accuracy_of_test_data+"max_scores.txt", max_scores, delimiter=',')  
+        np.save(path_save_accuracy_of_test_data+"std_scores.npy", std_scores)
+        np.savetxt(path_save_accuracy_of_test_data+"std_scores.txt", std_scores, delimiter=',')  
+        return scores

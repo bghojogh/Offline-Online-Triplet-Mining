@@ -16,43 +16,50 @@ import os
 from Evaluate_embedding_space import Evaluate_embedding_space
 import dataset_characteristics
 import pickle
+import glob
 
 # import warnings
 # warnings.filterwarnings('ignore')
 
 def main():
     #================================ settings:
-    train_the_embedding_space = False
-    evaluate_the_embedding_space = True
+    train_the_embedding_space = True
+    evaluate_the_embedding_space = False
     assert train_the_embedding_space != evaluate_the_embedding_space
     deep_model = "ResNet"  #--> "CNN", "ResNet"
-    loss_type = "triplet"   #--> "triplet", "FDA", "contrastive", "FDA_contrastive"
+    loss_type = "easy_positive_triplet_withInnerProduct"   #--> batch_hard_triplet, batch_semi_hard_triplet, batch_all_triplet, Nearest_Nearest_batch_triplet
+                                                  #    Nearest_Furthest_batch_triplet, Furthest_Furthest_batch_triplet, Different_distances_batch_triplet
+                                                # Negative_sampling_batch_triplet, easy_positive_triplet, Proxy_NCA_triplet_CentersAsProxies, easy_positive_triplet_withInnerProduct
     n_res_blocks = 18  #--> 18, 34, 50, 101, 152
-    batch_size = 16
+    batch_size = 45  # batch_size must be the same as batch_size in the code of generating batches
     # learning_rate = 0.00001
     learning_rate = 1e-5
     margin_in_loss = 0.25
     feature_space_dimension = 128
+    n_triplets_per_batch = 45  #--> n_samples / n_batches --> 15030 / 334
+    n_samples_per_class_in_batch = 5  #--> batch_size / n_classes --> 45 / 9
+    n_classes = len(dataset_characteristics.get_class_names())
     path_save_network_model = ".\\network_model\\" + deep_model + "\\"
     model_dir_ = model_dir(model_name=deep_model, n_res_blocks=n_res_blocks, batch_size=batch_size, learning_rate=learning_rate)
     #================================ 
     if train_the_embedding_space:
-        train_embedding_space(deep_model, n_res_blocks, batch_size, learning_rate, path_save_network_model, model_dir_, feature_space_dimension, margin_in_loss, loss_type)
+        train_embedding_space(deep_model, n_res_blocks, batch_size, learning_rate, path_save_network_model, model_dir_, feature_space_dimension, margin_in_loss, loss_type,
+                              n_triplets_per_batch, n_samples_per_class_in_batch, n_classes)
     if evaluate_the_embedding_space:
-        evaluate_embedding_space(path_save_network_model, model_dir_, deep_model, feature_space_dimension, n_res_blocks, margin_in_loss, loss_type)
+        evaluate_embedding_space(path_save_network_model, model_dir_, deep_model, feature_space_dimension, n_res_blocks, margin_in_loss, loss_type,
+                                 n_triplets_per_batch, n_samples_per_class_in_batch, n_classes, batch_size)
 
-def evaluate_embedding_space(path_save_network_model, model_dir_, deep_model, feature_space_dimension, n_res_blocks, margin_in_loss, loss_type):
-    Triplet_type = "Different_Distances"  # "Nearest_Nearest", "Nearest_Furthest", "Furthest_Nearest", "Furthest_Furthest", "Different_Distances", "Regular"
+def evaluate_embedding_space(path_save_network_model, model_dir_, deep_model, feature_space_dimension, n_res_blocks, margin_in_loss, loss_type,
+                             n_triplets_per_batch, n_samples_per_class_in_batch, n_classes, batch_size):
     which_epoch_to_load_NN_model = 50
     batch_size_test = 100
-    read_into_batches_again = False
-    embed_test_data_again = True
-    if embed_test_data_again:
-        assert read_into_batches_again is False
+    task_to_do = "classify"   #--> read_into_batches, embed_test_data, classify
+    proportions = [0.05, 0.1, 0.25, 0.5, 1]
 
     path_dataset_test = "D:\\Datasets\\CRC_new_large\\CRC_100K_train_test_numpy\\test2"
     path_save_test_patches = ".\\results\\" + deep_model + "\\batches_test2_set\\"
     path_save_embeddings_of_test_data = ".\\results\\" + deep_model + "\\embedding_test2_set\\"
+    path_save_accuracy_of_test_data = ".\\results\\" + deep_model + "\\accuracy_test2_set\\"
     image_height = dataset_characteristics.get_image_height()
     image_width = dataset_characteristics.get_image_width()
     image_n_channels = dataset_characteristics.get_image_n_channels()
@@ -60,78 +67,63 @@ def evaluate_embedding_space(path_save_network_model, model_dir_, deep_model, fe
     if deep_model == "CNN":
         siamese = CNN_Siamese.CNN_Siamese(loss_type=loss_type, feature_space_dimension=feature_space_dimension, margin_in_loss=margin_in_loss)
     elif deep_model == "ResNet":
-        siamese = ResNet_Siamese.ResNet_Siamese(loss_type=loss_type, feature_space_dimension=feature_space_dimension,
-                                                n_res_blocks=n_res_blocks, margin_in_loss=margin_in_loss, is_train=True)
+        # siamese = ResNet_Siamese.ResNet_Siamese(loss_type=loss_type, feature_space_dimension=feature_space_dimension,
+        #                                         n_res_blocks=n_res_blocks, margin_in_loss=margin_in_loss, is_train=True)
+        siamese = ResNet_Siamese.ResNet_Siamese(loss_type=loss_type, feature_space_dimension=feature_space_dimension, n_triplets_per_batch=n_triplets_per_batch, 
+                                                n_classes=n_classes, n_samples_per_class_in_batch=n_samples_per_class_in_batch,
+                                                n_res_blocks=n_res_blocks, margin_in_loss=margin_in_loss, is_train=True, batch_size=batch_size)
     evaluate_ = Evaluate_embedding_space(checkpoint_dir=path_save_network_model+str(which_epoch_to_load_NN_model)+"/", model_dir_=model_dir_, deep_model=deep_model,
                                             batch_size=batch_size_test, feature_space_dimension=feature_space_dimension)
 
-    if read_into_batches_again:
+    if task_to_do == "read_into_batches":
         paths_of_images = evaluate_.read_batches_paths(path_dataset=path_dataset_test, path_save_test_patches=path_save_test_patches)
-    if embed_test_data_again:
+    elif task_to_do == "embed_test_data":
         file = open(path_save_test_patches + 'paths_of_images.pickle', 'rb')
         paths_of_images = pickle.load(file)
         file.close()
         batches, batches_subtypes = evaluate_.read_data_into_batches(paths_of_images=paths_of_images)
         embedding, labels = evaluate_.embed_data_in_the_source_domain(batches=batches, batches_subtypes=batches_subtypes, 
                                                                         siamese=siamese, path_save_embeddings_of_test_data=path_save_embeddings_of_test_data)
+    elif task_to_do == "classify":
+        embedding = np.load(".\\results\\ResNet\\embedding_test2_set\\numpy\\embedding.npy")
+        labels = np.load(".\\results\\ResNet\\embedding_test2_set\\numpy\\subtypes.npy")
+        evaluate_.classification_in_target_domain_different_data_portions(X=embedding, y=labels, path_save_accuracy_of_test_data=path_save_accuracy_of_test_data, 
+                                                                          proportions=proportions, cv=10)
 
-
-def train_embedding_space(deep_model, n_res_blocks, batch_size, learning_rate, path_save_network_model, model_dir_, feature_space_dimension, margin_in_loss, loss_type):
+def train_embedding_space(deep_model, n_res_blocks, batch_size, learning_rate, path_save_network_model, model_dir_, feature_space_dimension, margin_in_loss, loss_type,
+                          n_triplets_per_batch, n_samples_per_class_in_batch, n_classes):
     #================================ settings:
     Triplet_type = "Different_Distances"  # "Nearest_Nearest", "Nearest_Furthest", "Furthest_Nearest", "Furthest_Furthest", "Different_Distances", "Regular"
     save_plot_embedding_space = True
     save_points_in_embedding_space = True
     load_saved_network_model = False
-    which_epoch_to_load_NN_model = 45
+    which_epoch_to_load_NN_model = 5
     num_epoch = 51
     save_network_model_every_how_many_epochs = 5
     save_embedding_every_how_many_epochs = 5
-    # STEPS_PER_EPOCH_TRAIN = 704
-    # STEPS_PER_EPOCH_TRAIN = 1875
-    STEPS_PER_EPOCH_TRAIN = 938  #--> 15000 / 16
     n_samples_plot = 2000   #--> if None, plot all
     image_height = dataset_characteristics.get_image_height()
     image_width = dataset_characteristics.get_image_width()
     image_n_channels = dataset_characteristics.get_image_n_channels()
-    path_tfrecords_train_base = "D:\\siamese_considering_distance\\codes\\6_create_triplets_with_distances\\8_correct_statistical_test\\triplets\\" + Triplet_type + "\\"
-    if Triplet_type == "Nearest_Nearest":
-        path_tfrecords_train = path_tfrecords_train_base + "triplets_Nearest_Nearest.tfrecords"
-    elif Triplet_type == "Nearest_Furthest":
-        path_tfrecords_train = path_tfrecords_train_base + "triplets_Nearest_Furthest.tfrecords"
-    elif Triplet_type == "Furthest_Nearest":
-        path_tfrecords_train = path_tfrecords_train_base + "triplets_Furthest_Nearest.tfrecords"
-    elif Triplet_type == "Furthest_Furthest":
-        path_tfrecords_train = path_tfrecords_train_base + "triplets_Furthest_Furthest.tfrecords"
-    elif Triplet_type == "Different_Distances":
-        path_tfrecords_train = path_tfrecords_train_base + "triplets_Different_Distances.tfrecords"
-    elif Triplet_type == "Regular":
-        path_tfrecords_train = path_tfrecords_train_base + "triplets_Regular.tfrecords"
     path_save_embedding_space = ".\\results\\" + deep_model + "\\embedding_train_set\\"
     path_save_loss = ".\\loss_saved\\"
+    # path_batches = "D:\\siamese_considering_distance\\codes\\9_create_batches_for_batchBasedMethods\\code\\batches\\"
+    # path_base_data_numpy = "D:\\Datasets\\CRC_new_large\\CRC_100K_train_test_numpy\\test1\\"
+    path_batches = "C:\\Users\\bghojogh\\Desktop\\code_pathology\\9_create_batches_for_batchBasedMethods\\code\\batches\\"
+    path_base_data_numpy = "C:\\Users\\bghojogh\\Desktop\\code_pathology\\data\\"
     #================================ 
 
-    train_dataset = tf.data.TFRecordDataset([path_tfrecords_train])
-    train_dataset = train_dataset.map(Utils.parse_function)
-    train_dataset = train_dataset.map(Utils.normalize_triplets)
-
-    num_repeat = None
-    train_dataset = train_dataset.repeat(num_repeat)
-    train_dataset = train_dataset.shuffle(buffer_size=1024)
-    train_dataset = train_dataset.batch(batch_size)
-    handle = tf.placeholder(tf.string, shape=[])
-    iterator = tf.data.Iterator.from_string_handle(handle, train_dataset.output_types,
-                                                             train_dataset.output_shapes)
-
-    next_element = iterator.get_next()
-    # training_iterator = train_dataset.make_initializable_iterator()
-    training_iterator = tf.data.make_initializable_iterator(train_dataset)
+    with open(path_batches + 'batches.pickle', 'rb') as handle:
+        loaded_batches_names = pickle.load(handle)
+    STEPS_PER_EPOCH_TRAIN = len(loaded_batches_names)  #--> must be the number of batches 
 
     # Siamese:
     if deep_model == "CNN":
         siamese = CNN_Siamese.CNN_Siamese(loss_type=loss_type, feature_space_dimension=feature_space_dimension, margin_in_loss=margin_in_loss)
     elif deep_model == "ResNet":
-        siamese = ResNet_Siamese.ResNet_Siamese(loss_type=loss_type, feature_space_dimension=feature_space_dimension,
-                                                n_res_blocks=n_res_blocks, margin_in_loss=margin_in_loss, is_train=True)
+        siamese = ResNet_Siamese.ResNet_Siamese(loss_type=loss_type, feature_space_dimension=feature_space_dimension, n_triplets_per_batch=n_triplets_per_batch, 
+                                                n_classes=n_classes, n_samples_per_class_in_batch=n_samples_per_class_in_batch,
+                                                n_res_blocks=n_res_blocks, margin_in_loss=margin_in_loss, is_train=True, batch_size=batch_size)
     # train_step = tf.train.GradientDescentOptimizer(learning_rate=0.1).minimize(siamese.loss)
     train_step = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(siamese.loss)
     # tf.initialize_all_variables().run()
@@ -141,9 +133,6 @@ def train_embedding_space(deep_model, n_res_blocks, batch_size, learning_rate, p
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
         sess.run(tf.local_variables_initializer())
-
-        training_handle = sess.run(training_iterator.string_handle())
-        sess.run(training_iterator.initializer)
 
         if load_saved_network_model:
             succesful_load, latest_epoch = load_network_model(saver_=saver_, session_=sess, checkpoint_dir=path_save_network_model+str(which_epoch_to_load_NN_model)+"/",
@@ -159,30 +148,22 @@ def train_embedding_space(deep_model, n_res_blocks, batch_size, learning_rate, p
         for epoch in range(latest_epoch+1, num_epoch):
             losses_in_epoch = []
             print("============= epoch: " + str(epoch) + "/" + str(num_epoch-1))
-            embeddings_in_epoch = np.zeros((STEPS_PER_EPOCH_TRAIN * batch_size * 3, feature_space_dimension))
-            labels_in_epoch = np.zeros((STEPS_PER_EPOCH_TRAIN * batch_size * 3,))
+            embeddings_in_epoch = np.zeros((STEPS_PER_EPOCH_TRAIN * batch_size, feature_space_dimension))
+            labels_in_epoch = np.zeros((STEPS_PER_EPOCH_TRAIN * batch_size,))
             for i in range(STEPS_PER_EPOCH_TRAIN):
                 if i % 10 == 0:
                     print("STEPS_PER_EPOCH_TRAIN " + str(i) + "/" + str(STEPS_PER_EPOCH_TRAIN) + "...")
-                image_anchor, image_neighbor, image_distant, label_anchor, label_neighbor, label_distant = sess.run(next_element,
-                                                                       feed_dict={handle: training_handle})
 
-                image_anchor = image_anchor.reshape((batch_size, image_height, image_width, image_n_channels))
-                image_neighbor = image_neighbor.reshape((batch_size, image_height, image_width, image_n_channels))
-                image_distant = image_distant.reshape((batch_size, image_height, image_width, image_n_channels))
+                loaded_batch, loaded_labels = read_batches_data(loaded_batch_names=loaded_batches_names[i], batch_size=batch_size, path_base_data_numpy=path_base_data_numpy)
 
-                _, loss_v, embedding1, embedding2, embedding3 = sess.run([train_step, siamese.loss, siamese.o1, siamese.o2, siamese.o3], feed_dict={
-                                                                                                    siamese.x1: image_anchor,
-                                                                                                    siamese.x2: image_neighbor,
-                                                                                                    siamese.x3: image_distant})
+                loaded_batch = loaded_batch.reshape((batch_size, image_height, image_width, image_n_channels))
 
-                embeddings_in_epoch[ ((i*3*batch_size)+(0*batch_size)) : ((i*3*batch_size)+(1*batch_size)), : ] = embedding1
-                embeddings_in_epoch[ ((i*3*batch_size)+(1*batch_size)) : ((i*3*batch_size)+(2*batch_size)), : ] = embedding2
-                embeddings_in_epoch[ ((i*3*batch_size)+(2*batch_size)) : ((i*3*batch_size)+(3*batch_size)), : ] = embedding3
+                _, loss_v, embedding1 = sess.run([train_step, siamese.loss, siamese.o1], feed_dict={siamese.x1: loaded_batch,
+                                                                                                    siamese.labels1: loaded_labels})
 
-                labels_in_epoch[ ((i*3*batch_size)+(0*batch_size)) : ((i*3*batch_size)+(1*batch_size)) ] = label_anchor
-                labels_in_epoch[ ((i*3*batch_size)+(1*batch_size)) : ((i*3*batch_size)+(2*batch_size)) ] = label_neighbor
-                labels_in_epoch[ ((i*3*batch_size)+(2*batch_size)) : ((i*3*batch_size)+(3*batch_size)) ] = label_distant
+                embeddings_in_epoch[ ((i*batch_size)+(0*batch_size)) : ((i*batch_size)+(1*batch_size)), : ] = embedding1
+
+                labels_in_epoch[ ((i*batch_size)+(0*batch_size)) : ((i*batch_size)+(1*batch_size)) ] = loaded_labels
 
                 losses_in_epoch.extend([loss_v])
                 
@@ -216,6 +197,27 @@ def train_embedding_space(deep_model, n_res_blocks, batch_size, learning_rate, p
                 # save_network_model(saver_=saver_, session_=sess, checkpoint_dir=path_save_network_model, step=epoch, model_name=deep_model, model_dir_=model_dir_)
                 save_network_model(saver_=saver_, session_=sess, checkpoint_dir=path_save_network_model+str(epoch)+"/", step=epoch, model_name=deep_model, model_dir_=model_dir_)
                 print("Model saved in path: %s" % path_save_network_model)
+
+def read_batches_data(loaded_batch_names, batch_size, path_base_data_numpy):
+    # batch_size must be the same as batch_size in the code of generating batches
+    tissue_type_list = ["00_TUMOR", "01_STROMA", "02_MUCUS", "03_LYMPHO", "04_DEBRIS", "05_SMOOTH_MUSCLE", "06_ADIPOSE", "07_BACKGROUND", "08_NORMAL"]
+    image_height = dataset_characteristics.get_image_height()
+    image_width = dataset_characteristics.get_image_width()
+    image_n_channels = dataset_characteristics.get_image_n_channels()
+    image_n_channels = dataset_characteristics.get_image_n_channels()
+    paths_data_files = glob.glob(path_base_data_numpy + "**\\*.npy")
+    loaded_batch = np.zeros((batch_size, image_height, image_width, image_n_channels))
+    loaded_labels = np.zeros((batch_size,))
+    for index_in_batch, file_name in enumerate(loaded_batch_names):
+        path_file_in_batch = [i for i in paths_data_files if file_name in i]
+        assert len(path_file_in_batch) == 1
+        path_ = path_file_in_batch[0]
+        class_label = path_.split("\\")[-2]
+        class_index = tissue_type_list.index(class_label)
+        file_in_batch = np.load(path_)
+        loaded_batch[index_in_batch, :, :, :] = file_in_batch
+        loaded_labels[index_in_batch] = class_index
+    return loaded_batch, loaded_labels
 
 def plot_embedding_of_points(embedding, labels, n_samples_plot=None):
     n_samples = embedding.shape[0]
